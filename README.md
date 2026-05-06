@@ -91,7 +91,6 @@ NeuroLens follows a modern decoupled architecture:
 ## 👤 Author
 
 **Karan Piramanayagam**
-*Visionary Developer & Healthcare Tech Innovator*
 
 ---
 
