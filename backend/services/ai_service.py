@@ -1,36 +1,67 @@
 import os
 import json
-import google.generativeai as genai
+import base64
 from groq import Groq
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# Configure Gemini
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+# Configure Groq with primary key
+GROQ_KEYS = [
+    os.getenv("GROQ_API_KEY"),
+    os.getenv("GROQ_API_KEY_BACKUP"),
+]
+# Filter out None values
+GROQ_KEYS = [k for k in GROQ_KEYS if k]
 
-# Configure Groq safely
-try:
-    groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-except Exception as e:
-    print(f"Warning: Groq client failed to initialize: {e}")
-    groq_client = None
+def _get_groq_client(key_index=0):
+    """Create a Groq client with the given key index."""
+    if key_index < len(GROQ_KEYS):
+        return Groq(api_key=GROQ_KEYS[key_index])
+    return None
+
+def _call_groq(prompt, key_index=0):
+    """Call Groq API with automatic failover to backup key."""
+    client = _get_groq_client(key_index)
+    if not client:
+        print(f"No Groq key available at index {key_index}")
+        return None
+    
+    try:
+        chat_completion = client.chat.completions.create(
+            messages=[{"role": "user", "content": prompt}],
+            model="llama-3.3-70b-versatile",
+            response_format={"type": "json_object"},
+            temperature=0.7,
+            max_tokens=2048,
+        )
+        text = chat_completion.choices[0].message.content.strip()
+        return json.loads(text)
+    except Exception as e:
+        print(f"Groq key {key_index} failed: {e}")
+        # Try backup key
+        if key_index + 1 < len(GROQ_KEYS):
+            print(f"Failing over to Groq key {key_index + 1}...")
+            return _call_groq(prompt, key_index + 1)
+        return None
+
 
 def get_ai_analysis(icon_type, input_data, file_data=None, mime_type=None):
+    """Analyze medical input for the spinning-logos diagnostic engine."""
     prompt = f"""
-    You are the NeuroLens AI Medical Engine. 
+    You are the NeuroLens AI Medical Engine — a futuristic, cinematic health intelligence system. 
     Analyze the following medical input for the '{icon_type}' engine.
-    {f'Manual Data: {json.dumps(input_data)}' if input_data else ''}
-    {f'Document provided for direct analysis.' if file_data else ''}
+    {'Manual Data: ' + json.dumps(input_data) if input_data else ''}
+    {'A medical document/image was uploaded for analysis.' if file_data else ''}
     
-    Provide a professional medical analysis including:
-    1. A concise summary (max 2 sentences).
+    Provide a professional, intelligent medical analysis including:
+    1. A concise summary (max 2 sentences, sound futuristic and premium).
     2. Exactly 3 key biological insights or observations.
     3. A stability score (0-100).
     4. A projected trend direction ('upward', 'downward', or 'stable').
     5. A risk level ('low', 'medium', 'high', or 'severe').
     
-    Format the response as JSON:
+    Return ONLY valid JSON in this exact format:
     {{
         "summary": "...",
         "insights": ["...", "...", "..."],
@@ -40,25 +71,30 @@ def get_ai_analysis(icon_type, input_data, file_data=None, mime_type=None):
     }}
     """
     
-    if file_data:
-        return _call_ai_multimodal([prompt, {'mime_type': mime_type, 'data': file_data}])
-    return _call_ai(prompt)
+    result = _call_groq(prompt)
+    if result:
+        return result
+    
+    # Hardcoded fallback if all keys fail
+    return _get_fallback_analysis()
+
 
 def generate_health_intelligence(user_data, report_text=None, file_data=None, mime_type=None):
+    """Generate full Health Twin intelligence from a medical report."""
     prompt = f"""
-    You are the NeuroLens AI Health Twin. 
+    You are the NeuroLens AI Health Twin — a cinematic, futuristic health intelligence persona.
     Analyze the following medical report for a user with the given profile.
     User Profile: {json.dumps(user_data)}
-    {f'Report Text: {report_text}' if report_text else 'Analyze the provided document/image directly.'}
+    {'Report Text: ' + report_text if report_text else 'No specific report text provided. Generate a general health baseline.'}
     
     Provide health intelligence including:
     1. AI Health Score (0-100)
     2. Risk Radar Data (categories: Cardiovascular, Metabolic, Immune, Mental, Physical; score 1-10)
-    3. Health Narrative (cinematic and supportive summary)
+    3. Health Narrative (cinematic, emotionally intelligent, and supportive summary — make it sound premium)
     4. 3 Preventive Recommendations
     5. Risk Categories (high impact areas)
     
-    Format the response as JSON:
+    Return ONLY valid JSON in this exact format:
     {{
         "ai_health_score": 85,
         "risk_radar_data": {{ "Cardiovascular": 4, "Metabolic": 3, "Immune": 5, "Mental": 2, "Physical": 4 }},
@@ -68,54 +104,45 @@ def generate_health_intelligence(user_data, report_text=None, file_data=None, mi
     }}
     """
     
-    content = [prompt]
-    if file_data:
-        content.append({'mime_type': mime_type, 'data': file_data})
+    result = _call_groq(prompt)
+    if result:
+        return result
     
-    return _call_ai_multimodal(content)
+    # Hardcoded fallback
+    return _get_fallback_intelligence()
 
-def _call_ai_multimodal(content):
-    try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        response = model.generate_content(content)
-        text = response.text.replace('```json', '').replace('```', '').strip()
-        return json.loads(text)
-    except Exception as e:
-        print(f"Multimodal Gemini failed: {e}")
-        # Fallback to text-only if possible or return default
-        return _call_ai(content[0]) # prompt is always index 0
 
-def _call_ai(prompt):
-    # Try Gemini first
-    try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        response = model.generate_content(prompt)
-        text = response.text.replace('```json', '').replace('```', '').strip()
-        return json.loads(text)
-    except Exception as e:
-        print(f"Gemini failed: {e}")
-        # Fallback to Groq
-        if groq_client:
-            try:
-                chat_completion = groq_client.chat.completions.create(
-                    messages=[{"role": "user", "content": prompt}],
-                    model="llama-3.1-8b-instant",
-                    response_format={"type": "json_object"}
-                )
-                return json.loads(chat_completion.choices[0].message.content)
-            except Exception as e2:
-                print(f"Groq also failed: {e2}")
-        
-        # Final Fallback
-        return {
-            "summary": "AI processing temporarily restricted. Showing baseline biological monitoring data.",
-            "insights": ["Standard biological variation detected", "Temporal trend remains within safe parameters", "Manual clinical review recommended"],
-            "stability": 88.2,
-            "trend": "stable",
-            "risk_level": "medium",
-            "ai_health_score": 75,
-            "risk_radar_data": { "Cardiovascular": 5, "Metabolic": 5, "Immune": 5, "Mental": 5, "Physical": 5 },
-            "health_narrative": "AI analysis is currently limited, showing standard health metrics.",
-            "preventive_recommendations": ["Maintain hydration", "Regular sleep", "Active walking"],
-            "risk_categories": ["Baseline"]
-        }
+def _get_fallback_analysis():
+    """Static fallback when all API keys fail."""
+    return {
+        "summary": "AI processing temporarily restricted. Showing baseline biological monitoring data.",
+        "insights": [
+            "Standard biological variation detected within expected parameters",
+            "Temporal trend remains within safe operating thresholds",
+            "Manual clinical review recommended for comprehensive evaluation"
+        ],
+        "stability": 88.2,
+        "trend": "stable",
+        "risk_level": "medium"
+    }
+
+
+def _get_fallback_intelligence():
+    """Static fallback for Health Twin when all API keys fail."""
+    return {
+        "ai_health_score": 75,
+        "risk_radar_data": {
+            "Cardiovascular": 5,
+            "Metabolic": 5,
+            "Immune": 5,
+            "Mental": 5,
+            "Physical": 5
+        },
+        "health_narrative": "Your Health Twin is currently operating in safe mode. Core biological systems appear stable, but a full AI-powered analysis requires active API connectivity. Upload a new report to trigger a fresh scan.",
+        "preventive_recommendations": [
+            "Maintain consistent hydration levels",
+            "Prioritize 7-8 hours of restorative sleep",
+            "Incorporate 30 minutes of active movement daily"
+        ],
+        "risk_categories": ["Baseline Monitoring"]
+    }

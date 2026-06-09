@@ -38,7 +38,7 @@ def upload_report():
         user = User.query.get(user_id)
         
         # Save to DB
-        new_report = Report(user_id=user_id, filename=filename, raw_text="Extracted via Gemini Multimodal.")
+        new_report = Report(user_id=user_id, filename=filename, raw_text="Extracted via NeuroLens AI Engine.")
         db.session.add(new_report)
         db.session.flush() # To get the report ID
         
